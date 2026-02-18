@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Convert Access to SQLite</title>
+  </head>
+  <body>
+    <div id="file-notice" style="display:none;padding:2em;font-family:sans-serif;max-width:480px;">
+      <h1>Open the built file</h1>
+      <p>You opened the <strong>source</strong> <code>index.html</code>. For local / CrossDev use the built file:</p>
+      <p><strong>dist/index.html</strong></p>
+      <p>Run <code>cnpm run build</code> first, then open <code>dist/index.html</code> (or point CrossDev at it).</p>
+    </div>
+    <div id="app"></div>
+    <script>
+      if (location.protocol === 'file:' && !location.pathname.includes('dist')) {
+        document.getElementById('file-notice').style.display = 'block';
+        document.getElementById('app').style.display = 'none';
+      }
+    </script>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
