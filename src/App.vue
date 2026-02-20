@@ -1,11 +1,25 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
+import FolderToolbar from './components/FolderToolbar.vue'
+import MdbTable from './components/MdbTable.vue'
 
 const selectedFolder = ref('')
 const mdbFiles = ref([])
 const isLoading = ref(false)
 const statusMessage = ref('')
 const isBatchConverting = ref(false)
+const filterText = ref('')
+const titleFilter = ref('')
+const authorFilter = ref('')
+const categoryFilter = ref('')
+const showSelectedOnly = ref(false)
+
+const normalizeText = (value) => {
+  if (!value) return ''
+  let s = value.toString().normalize('NFD')
+  s = s.replace(/[\u064B-\u065F\u0617-\u061A\u06D6-\u06ED\u0670\u0640]/g, '')
+  return s.toLowerCase()
+}
 
 const hasCrossDev = () => typeof window !== 'undefined' && window.CrossDev && typeof window.CrossDev.invoke === 'function'
 
@@ -13,6 +27,7 @@ const openFolderDialog = async () => {
   isLoading.value = true
   statusMessage.value = 'Opening folder selection...'
   mdbFiles.value = []
+  filterText.value = ''
 
   try {
     if (hasCrossDev()) {
@@ -23,14 +38,39 @@ const openFolderDialog = async () => {
         return
       }
       selectedFolder.value = response.folder || ''
+      console.log('mdbSelectFolder debug:', {
+        debug_mainPath: response.debug_mainPath,
+        debug_bookCount: response.debug_bookCount,
+        sampleFile: response.files && response.files[0],
+      })
       mdbFiles.value = Array.isArray(response.files)
-        ? response.files.map((p) => ({
-            path: p,
-            selected: false,
-            converting: false,
-            status: '',
-            sqlitePath: '',
-          }))
+        ? response.files.map((item) => {
+            if (typeof item === 'string') {
+              return {
+                path: item,
+                bookName: '',
+                categoryName: '',
+                authorName: '',
+                selected: false,
+                converting: false,
+                status: '',
+                sqlitePath: '',
+              }
+            }
+            const path = item && typeof item.path === 'string' ? item.path : ''
+            return {
+              path,
+              bookName: item && typeof item.bookName === 'string' ? item.bookName : '',
+              categoryName:
+                item && typeof item.categoryName === 'string' ? item.categoryName : '',
+              authorName:
+                item && typeof item.authorName === 'string' ? item.authorName : '',
+              selected: false,
+              converting: false,
+              status: '',
+              sqlitePath: '',
+            }
+          })
         : []
       statusMessage.value = `Found ${mdbFiles.value.length} MDB files`
       isLoading.value = false
@@ -44,12 +84,78 @@ const openFolderDialog = async () => {
   }
 }
 
-const allSelected = () => mdbFiles.value.length > 0 && mdbFiles.value.every((f) => f.selected)
+const filteredFiles = computed(() => {
+  let files = mdbFiles.value
+
+  if (categoryFilter.value) {
+    files = files.filter((f) => (f.categoryName || '') === categoryFilter.value)
+  }
+
+  const title = normalizeText(titleFilter.value.trim())
+  if (title) {
+    files = files.filter((f) => normalizeText(f.bookName || '').includes(title))
+  }
+
+  const author = normalizeText(authorFilter.value.trim())
+  if (author) {
+    files = files.filter((f) =>
+      normalizeText(f.authorName || '').includes(author),
+    )
+  }
+
+  const text = normalizeText(filterText.value.trim())
+  if (text) {
+    files = files.filter((f) => normalizeText(f.path || '').includes(text))
+  }
+
+  if (showSelectedOnly.value) {
+    files = files.filter((f) => f.selected)
+  }
+
+  return files
+})
+
+const pageSize = 50
+const visibleCount = ref(pageSize)
+
+watch(filteredFiles, () => {
+  visibleCount.value = pageSize
+})
+
+const visibleFiles = computed(() =>
+  filteredFiles.value.slice(0, visibleCount.value),
+)
+
+const canLoadMore = computed(
+  () => visibleCount.value < filteredFiles.value.length,
+)
+
+const loadMore = () => {
+  if (visibleCount.value < filteredFiles.value.length) {
+    visibleCount.value += pageSize
+  }
+}
+
+const categories = computed(() => {
+  const set = new Set()
+  for (const f of mdbFiles.value) {
+    if (f.categoryName) {
+      set.add(f.categoryName)
+    }
+  }
+  return Array.from(set).sort()
+})
+
+const allSelected = () =>
+  filteredFiles.value.length > 0 && filteredFiles.value.every((f) => f.selected)
 const anySelected = () => mdbFiles.value.some((f) => f.selected)
 
 const toggleSelectAll = () => {
   const target = !allSelected()
-  mdbFiles.value = mdbFiles.value.map((f) => ({ ...f, selected: target }))
+  const visiblePaths = new Set(filteredFiles.value.map((f) => f.path))
+  mdbFiles.value = mdbFiles.value.map((f) =>
+    visiblePaths.has(f.path) ? { ...f, selected: target } : f
+  )
 }
 
 const toggleRowSelection = (file) => {
@@ -176,76 +282,35 @@ const batchConvert = async () => {
     </header>
     
     <main class="main-content">
-      <div class="folder-selector">
-        <button 
-          class="btn btn-primary" 
-          @click="openFolderDialog"
-          :disabled="isLoading"
-        >
-          {{ isLoading ? 'Selecting...' : 'Choose Folder' }}
-        </button>
-        <button
-          class="btn btn-secondary"
-          @click="batchConvert"
-          :disabled="!mdbFiles.length || !anySelected() || isBatchConverting"
-        >
-          {{ isBatchConverting ? 'Batch converting...' : 'Batch convert to folder...' }}
-        </button>
-      </div>
-      
-      <div v-if="selectedFolder" class="folder-display">
-        <div class="folder-info">
-          <p class="label">Selected Folder:</p>
-          <p class="path">{{ selectedFolder }}</p>
-          <p class="label" style="margin-top: 0.75rem;">MDB Files Found: {{ mdbFiles.length }}</p>
+      <FolderToolbar
+        :is-loading="isLoading"
+        :is-batch-converting="isBatchConverting"
+        :has-files="!!mdbFiles.length"
+        :has-selected="anySelected()"
+        @choose-folder="openFolderDialog"
+        @batch-convert="batchConvert"
+      />
 
-          <table v-if="mdbFiles.length" class="file-table">
-            <thead>
-              <tr>
-                <th class="col-select">
-                  <input
-                    type="checkbox"
-                    :checked="allSelected()"
-                    @change="toggleSelectAll"
-                  />
-                </th>
-                <th class="col-path">Path</th>
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="file in mdbFiles" :key="file.path">
-                <td class="col-select">
-                  <input
-                    type="checkbox"
-                    :checked="file.selected"
-                    @change="toggleRowSelection(file)"
-                  />
-                </td>
-                <td class="col-path">
-                  <div class="path">{{ file.path }}</div>
-                  <div v-if="file.sqlitePath" class="sqlite-path">
-                    → {{ file.sqlitePath }}
-                  </div>
-                </td>
-                <td class="col-actions">
-                  <button
-                    class="btn btn-small"
-                    @click="convertSingleHere(file)"
-                    :disabled="file.converting"
-                  >
-                    {{ file.converting ? 'Converting...' : 'Convert here' }}
-                  </button>
-                  <div v-if="file.status" class="status-chip">
-                    {{ file.status }}
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <div v-if="selectedFolder" class="folder-display">
+        <MdbTable
+          :selected-folder="selectedFolder"
+          :mdb-files-length="mdbFiles.length"
+          :filtered-files="visibleFiles"
+          v-model:filterText="filterText"
+          v-model:titleFilter="titleFilter"
+          v-model:authorFilter="authorFilter"
+          v-model:categoryFilter="categoryFilter"
+          v-model:showSelectedOnly="showSelectedOnly"
+          :all-selected="allSelected()"
+          :categories="categories"
+          :can-load-more="canLoadMore"
+          @toggle-select-all="toggleSelectAll"
+          @toggle-row-selection="toggleRowSelection"
+          @convert-single="convertSingleHere"
+          @load-more="loadMore"
+        />
       </div>
-      
+
       <div v-if="statusMessage" class="status-message">
         {{ statusMessage }}
       </div>
@@ -265,20 +330,21 @@ const batchConvert = async () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: radial-gradient(circle at top, #e5edff 0%, #c7d2fe 35%, #e5e7eb 100%);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 .header {
-  padding: 2rem;
-  color: white;
+  padding: 1.75rem 2rem;
+  color: #111827;
   text-align: center;
 }
 
 .header h1 {
-  font-size: 2.5rem;
+  font-size: 2.7rem;
   margin-bottom: 0.5rem;
   font-weight: 700;
+  letter-spacing: 0.03em;
 }
 
 .subtitle {
@@ -291,14 +357,15 @@ const batchConvert = async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 2rem;
-  padding: 2rem;
+  padding: 2.5rem;
 }
 
 .folder-selector {
   display: flex;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -312,18 +379,20 @@ const batchConvert = async () => {
 }
 
 .btn-primary {
-  background-color: #fff;
-  color: #667eea;
+  background: linear-gradient(135deg, #5c7cfa 0%, #4e5cf5 50%, #9164ff 100%);
+  color: #f5f7ff;
+  box-shadow: 0 10px 25px rgba(37, 63, 172, 0.4);
 }
 
 .btn-primary:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 16px 35px rgba(37, 63, 172, 0.55);
 }
 
 .btn-secondary {
-  background-color: rgba(255, 255, 255, 0.9);
-  color: #333;
+  background-color: rgba(15, 23, 42, 0.9);
+  color: #e5e7f5;
+  border: 1px solid rgba(148, 163, 184, 0.5);
 }
 
 .btn:disabled {
@@ -333,41 +402,99 @@ const batchConvert = async () => {
 
 .folder-display {
   width: 100%;
-  max-width: 600px;
+  max-width: 960px;
 }
 
 .folder-info {
-  background: rgba(255, 255, 255, 0.95);
+  background: #f9fafb;
   padding: 1.5rem;
   border-radius: 0.5rem;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 18px 45px rgba(148, 163, 184, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.5);
 }
 
 .label {
   font-weight: 600;
-  color: #333;
+  color: #111827;
   margin-bottom: 0.5rem;
 }
 
 .path {
   font-family: 'Monaco', 'Courier New', monospace;
-  color: #666;
+  color: #374151;
   word-break: break-all;
   font-size: 0.9rem;
 }
 
+.list-header {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.list-controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.toggle-selected {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.toggle-selected .checkbox-large {
+  width: 18px;
+  height: 18px;
+}
+
+.filter-input {
+  flex: 0 0 260px;
+  max-width: 100%;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background-color: #ffffff;
+  color: #111827;
+  font-size: 0.85rem;
+}
+
+.filter-input::placeholder {
+  color: #9ca3af;
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.7);
+}
+
 .status-message {
-  color: white;
+  color: #111827;
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(255, 255, 255, 0.9);
   border-radius: 0.5rem;
-  max-width: 600px;
+  max-width: 960px;
   text-align: center;
+}
+
+.file-table-wrapper {
+  margin-top: 0.75rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(209, 213, 219, 0.9);
+  background-color: #ffffff;
 }
 
 .file-table {
   width: 100%;
-  margin-top: 0.75rem;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
@@ -375,17 +502,23 @@ const batchConvert = async () => {
 .file-table th,
 .file-table td {
   padding: 0.5rem;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid rgba(229, 231, 235, 1);
   vertical-align: top;
 }
 
 .file-table thead {
-  background-color: #f5f5f5;
+  background-color: #eff6ff;
+  color: #1f2937;
 }
 
 .col-select {
-  width: 2.5rem;
+  width: 3rem;
   text-align: center;
+}
+
+.col-select input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
 }
 
 .col-actions {
@@ -400,14 +533,15 @@ const batchConvert = async () => {
 .sqlite-path {
   margin-top: 0.25rem;
   font-size: 0.8rem;
-  color: #888;
+  color: #4b5563;
 }
 
 .status-chip {
   margin-top: 0.25rem;
   padding: 0.15rem 0.4rem;
   border-radius: 999px;
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: rgba(59, 130, 246, 0.09);
+  border: 1px solid rgba(59, 130, 246, 0.4);
   font-size: 0.75rem;
   display: inline-block;
 }

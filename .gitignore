@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+*.mdb
+*.sqlite
+*.db
+*.dylib
+*.dll
+*.so
 
 # CMake / build artifacts
 build/

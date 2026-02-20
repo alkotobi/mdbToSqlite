@@ -20,3 +20,8 @@ set_target_properties(CrossDevAppPlugin PROPERTIES
 if(APPLE)
     target_link_options(CrossDevAppPlugin PRIVATE "-undefined" "dynamic_lookup")
 endif()
+
+find_library(SQLITE3_LIB sqlite3)
+if(SQLITE3_LIB)
+    target_link_libraries(CrossDevAppPlugin PRIVATE ${SQLITE3_LIB})
+endif()
